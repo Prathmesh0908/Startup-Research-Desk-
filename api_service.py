@@ -9,11 +9,13 @@ from groq import Groq
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "llama3-8b-8192")
 RPM_LIMIT = int(os.getenv("GROQ_RPM_LIMIT", "28"))
 MIN_DELAY_BETWEEN_CALLS = float(os.getenv("GROQ_MIN_DELAY_SECONDS", "2.2"))
 MAX_RETRIES = int(os.getenv("GROQ_MAX_RETRIES", "3"))
 RETRY_BASE_SLEEP = float(os.getenv("GROQ_RETRY_BASE_SLEEP", "15"))
+MAX_RETRY_SLEEP = float(os.getenv("GROQ_MAX_RETRY_SLEEP", "20"))
 
 _request_times: deque = deque()
 
@@ -68,10 +70,10 @@ def _extract_retry_delay(exc: Exception) -> float:
     retry_after = headers.get("retry-after")
     if retry_after:
         try:
-            return float(retry_after) + 1
+            return min(float(retry_after) + 1, MAX_RETRY_SLEEP)
         except ValueError:
             pass
-    return RETRY_BASE_SLEEP
+    return min(RETRY_BASE_SLEEP, MAX_RETRY_SLEEP)
 
 
 def safe_generate(
@@ -81,37 +83,53 @@ def safe_generate(
     tools: Optional[List[Dict[str, Any]]] = None,
     log_step=None,
     response_format: Optional[Dict[str, str]] = None,
+    max_completion_tokens: Optional[int] = None,
 ) -> Any:
     request_messages = [{"role": "system", "content": system_instruction}, *messages]
+    models_to_try = [MODEL]
+    if FALLBACK_MODEL and FALLBACK_MODEL != MODEL:
+        models_to_try.append(FALLBACK_MODEL)
 
-    for attempt in range(1, MAX_RETRIES + 1):
-        _throttle()
-        try:
-            kwargs: Dict[str, Any] = {
-                "model": MODEL,
-                "messages": request_messages,
-            }
-            if tools:
-                kwargs["tools"] = tools
-                kwargs["tool_choice"] = "auto"
-            if response_format:
-                kwargs["response_format"] = response_format
-            return client.chat.completions.create(**kwargs)
-        except Exception as exc:
-            status_code = _get_status_code(exc)
-            if status_code == 429 and attempt < MAX_RETRIES:
-                wait = _extract_retry_delay(exc)
-                logger.warning(
-                    "[429] Rate limited. Waiting %.0fs (attempt %s/%s)...",
-                    wait,
-                    attempt,
-                    MAX_RETRIES,
-                )
-                if log_step:
-                    log_step(f"Rate limit hit, retrying in {wait:.0f}s...")
-                time.sleep(wait)
-                continue
-            raise
+    for model_name in models_to_try:
+        for attempt in range(1, MAX_RETRIES + 1):
+            _throttle()
+            try:
+                kwargs: Dict[str, Any] = {
+                    "model": model_name,
+                    "messages": request_messages,
+                }
+                if tools:
+                    kwargs["tools"] = tools
+                    kwargs["tool_choice"] = "auto"
+                if response_format:
+                    kwargs["response_format"] = response_format
+                if max_completion_tokens is not None:
+                    kwargs["max_completion_tokens"] = max_completion_tokens
+                return client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                status_code = _get_status_code(exc)
+                if status_code == 429:
+                    wait = _extract_retry_delay(exc)
+                    is_last_attempt = attempt >= MAX_RETRIES
+                    has_fallback_remaining = model_name != models_to_try[-1]
+                    logger.warning(
+                        "[429] Rate limited on %s. Waiting %.0fs (attempt %s/%s)...",
+                        model_name,
+                        wait,
+                        attempt,
+                        MAX_RETRIES,
+                    )
+                    if log_step:
+                        if has_fallback_remaining and is_last_attempt:
+                            log_step(f"Rate limit on {model_name}; switching to fallback model...")
+                        elif not is_last_attempt:
+                            log_step(f"Rate limit on {model_name}; retrying in {wait:.0f}s...")
+                    if not is_last_attempt:
+                        time.sleep(wait)
+                        continue
+                    if has_fallback_remaining:
+                        break
+                raise
 
     raise RuntimeError(f"Groq API failed after {MAX_RETRIES} retries.")
 
@@ -121,12 +139,14 @@ def simple_generate(
     prompt: str,
     system: str,
     log_step=None,
+    max_completion_tokens: Optional[int] = None,
 ) -> str:
     response = safe_generate(
         client,
         messages=[{"role": "user", "content": prompt}],
         system_instruction=system,
         log_step=log_step,
+        max_completion_tokens=max_completion_tokens,
     )
     return _extract_message_text(response.choices[0].message).strip()
 
