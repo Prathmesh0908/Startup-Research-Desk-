@@ -4,35 +4,11 @@ import os
 
 from tavily import TavilyClient
 
-from api_service import (
-    assistant_message_from_response,
-    parse_tool_arguments,
-    safe_generate,
-    simple_generate,
-)
+from api_service import simple_generate, safe_generate
 
 
 def get_tavily():
     return TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-
-
-SEARCH_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "tavily_search",
-        "description": "Search the web for current information about a startup, market, or founder.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query",
-                }
-            },
-            "required": ["query"],
-        },
-    },
-}
 
 
 def run_search(query):
@@ -45,58 +21,38 @@ def run_search(query):
         return f"Search failed: {e}"
 
 
-def market_researcher(client, startup_name, domain, log_step=None, max_turns=6):
+def market_researcher(client, startup_name, domain, log_step=None):
     if log_step:
-        log_step("Market Researcher: starting agentic loop...")
+        log_step("Market Researcher: gathering market context...")
 
-    system = (
-        "You are a market research analyst. Search for the startup's market size, "
-        "growth trends, recent funding news, and industry trajectory. "
-        "Use the search tool multiple times. When you have enough, produce a JSON summary with keys: "
-        "market_size, growth_rate, key_trends (list), recent_news (list), confidence_score (1-5)."
-    )
-
-    messages = [
-        {
-            "role": "user",
-            "content": f"Research the market for startup: {startup_name} ({domain})",
-        }
+    searches = [
+        f"{startup_name} market size industry trends",
+        f"{startup_name} funding news market growth",
+        f"{startup_name} industry outlook competitors",
     ]
 
-    for turn in range(max_turns):
-        response = safe_generate(
-            client,
-            messages,
-            system_instruction=system,
-            tools=[SEARCH_TOOL],
-            log_step=log_step,
-        )
+    if domain:
+        searches.append(f"{startup_name} {domain} market positioning")
 
-        message = response.choices[0].message
-        tool_calls = getattr(message, "tool_calls", None) or []
+    context = ""
+    for query in searches:
+        if log_step:
+            log_step(f"Market Researcher: searching -> {query}")
+        context += run_search(query) + "\n\n"
 
-        if not tool_calls:
-            if log_step:
-                log_step(f"Market Researcher: done in {turn + 1} turns.")
-            return (message.content or "").strip()
+    prompt = (
+        f"Research the market for startup: {startup_name} ({domain}).\n\n"
+        f"Search context:\n{context}\n\n"
+        "Return a JSON summary with keys: market_size, growth_rate, "
+        "key_trends (list), recent_news (list), confidence_score (1-5)."
+    )
 
-        messages.append(assistant_message_from_response(response))
-
-        for tool_call in tool_calls:
-            args = parse_tool_arguments(tool_call.function.arguments)
-            query = args.get("query", "")
-            if log_step:
-                log_step(f"Market Researcher: searching -> {query}")
-            result = run_search(query)
-            messages.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": result,
-                }
-            )
-
-    return "Max turns reached. Partial research only."
+    return simple_generate(
+        client,
+        prompt,
+        system="You are a market research analyst focused on startup market opportunity.",
+        log_step=log_step,
+    )
 
 
 def founder_analyst(client, startup_name, log_step=None):
