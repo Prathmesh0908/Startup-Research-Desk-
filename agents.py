@@ -177,6 +177,37 @@ JUDGE_PROMPT = """Evaluate this startup research brief:
 }}"""
 
 
+def _extract_json_object(text):
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end <= start:
+        raise json.JSONDecodeError("No JSON object found", text, 0)
+    return text[start:end + 1]
+
+
+def _normalize_judge_result(result):
+    scores = result.get("scores", {})
+    values = []
+    for item in scores.values():
+        if isinstance(item, dict):
+            score = item.get("score")
+            if isinstance(score, (int, float)):
+                values.append(float(score))
+
+    computed_average = round(sum(values) / len(values), 1) if values else None
+    overall_score = result.get("overall_score")
+
+    if computed_average is None:
+        return result
+
+    if not isinstance(overall_score, (int, float)) or overall_score > 5:
+        result["overall_score"] = computed_average
+        return result
+
+    result["overall_score"] = max(1.0, min(float(overall_score), 5.0))
+    return result
+
+
 def judge_agent(client, report, log_step=None):
     if log_step:
         log_step("Judge: evaluating report against rubric...")
@@ -187,15 +218,16 @@ def judge_agent(client, report, log_step=None):
         messages=[{"role": "user", "content": prompt}],
         system_instruction=JUDGE_SYSTEM,
         log_step=log_step,
-        response_format={"type": "json_object"},
         max_completion_tokens=350,
     )
 
     text = (response.choices[0].message.content or "").strip()
     text = re.sub(r"```json|```", "", text).strip()
+    text = _extract_json_object(text)
 
     try:
         result = json.loads(text)
+        result = _normalize_judge_result(result)
         if log_step:
             log_step(f"Judge: overall score = {result.get('overall_score', '?')}/5")
         return result
