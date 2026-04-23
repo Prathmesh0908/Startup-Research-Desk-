@@ -28,7 +28,6 @@ def market_researcher(client, startup_name, domain, log_step=None):
     searches = [
         f"{startup_name} market size industry trends",
         f"{startup_name} funding news market growth",
-        f"{startup_name} industry outlook competitors",
     ]
 
     if domain:
@@ -52,6 +51,7 @@ def market_researcher(client, startup_name, domain, log_step=None):
         prompt,
         system="You are a market research analyst focused on startup market opportunity.",
         log_step=log_step,
+        max_completion_tokens=500,
     )
 
 
@@ -62,7 +62,6 @@ def founder_analyst(client, startup_name, log_step=None):
     searches = [
         f"{startup_name} founder CEO background",
         f"{startup_name} founding team education previous experience",
-        f"{startup_name} founders previous startup exits",
     ]
 
     context = ""
@@ -83,6 +82,7 @@ def founder_analyst(client, startup_name, log_step=None):
         prompt,
         system="You are a VC analyst evaluating founding teams.",
         log_step=log_step,
+        max_completion_tokens=450,
     )
 
 
@@ -93,7 +93,6 @@ def competitive_intel(client, startup_name, market_summary, log_step=None):
     searches = [
         f"{startup_name} competitors alternatives",
         f"{startup_name} vs competitors comparison",
-        f"best {startup_name} alternatives 2024",
     ]
 
     context = ""
@@ -114,6 +113,7 @@ def competitive_intel(client, startup_name, market_summary, log_step=None):
         prompt,
         system="You are a competitive intelligence analyst.",
         log_step=log_step,
+        max_completion_tokens=500,
     )
 
 
@@ -136,6 +136,7 @@ def report_writer(client, startup_name, market_data, founder_data, competitor_da
         prompt,
         system="You are a senior VC analyst writing an investment committee brief.",
         log_step=log_step,
+        max_completion_tokens=900,
     )
 
 
@@ -187,6 +188,7 @@ def judge_agent(client, report, log_step=None):
         system_instruction=JUDGE_SYSTEM,
         log_step=log_step,
         response_format={"type": "json_object"},
+        max_completion_tokens=350,
     )
 
     text = (response.choices[0].message.content or "").strip()
