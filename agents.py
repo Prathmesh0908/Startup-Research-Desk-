@@ -11,14 +11,101 @@ def get_tavily():
     return TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
 
 
+_SEARCH_CACHE = {}
+
+
 def run_search(query):
+    cached = _SEARCH_CACHE.get(query)
+    if cached is not None:
+        return cached
     try:
         tavily = get_tavily()
-        result = tavily.search(query=query, max_results=5)
+        result = tavily.search(query=query, max_results=3)
         snippets = [r["content"] for r in result.get("results", [])]
-        return "\n\n".join(snippets) if snippets else "No results found."
+        output = "\n\n".join(snippets) if snippets else "No results found."
+        _SEARCH_CACHE[query] = output
+        return output
     except Exception as e:
         return f"Search failed: {e}"
+
+
+def _merge_nested(defaults, parsed):
+    if isinstance(defaults, dict):
+        source = parsed if isinstance(parsed, dict) else {}
+        merged = {}
+        for key, default_value in defaults.items():
+            merged[key] = _merge_nested(default_value, source.get(key))
+        for key, value in source.items():
+            if key not in merged:
+                merged[key] = value
+        return merged
+
+    if isinstance(defaults, list):
+        if isinstance(parsed, list) and parsed:
+            return parsed
+        return defaults
+
+    if parsed in (None, "", [], {}):
+        return defaults
+    return parsed
+
+
+def _generate_structured_analysis(
+    client,
+    prompt,
+    system,
+    defaults,
+    log_step=None,
+    max_completion_tokens=700,
+):
+    raw_text = simple_generate(
+        client,
+        prompt,
+        system=system,
+        log_step=log_step,
+        max_completion_tokens=max_completion_tokens,
+    )
+    parsed, cleaned = _parse_agent_payload(raw_text)
+    merged = _merge_nested(defaults, parsed if isinstance(parsed, dict) else {})
+    merged["_raw"] = cleaned
+    return merged
+
+
+def _normalize_validator_scores(result):
+    hidden_flaws = _ensure_list(result.get("hidden_flaws"))
+    red_flags = _ensure_list(result.get("risks_red_flags"))
+    competition_level = _stringify(result.get("competition_level"), "Moderate").lower()
+    investor_verdict = _stringify((result.get("investor_lens") or {}).get("verdict"), "Maybe").lower()
+
+    readiness = result.get("founder_readiness_score")
+    investor_score = result.get("investor_interest_score")
+
+    def _looks_default(value):
+        if isinstance(value, (int, float)):
+            return float(value) == 5.0
+        if isinstance(value, str):
+            match = re.search(r"([0-9]+(?:\.[0-9]+)?)", value)
+            return bool(match) and float(match.group(1)) == 5.0
+        return True
+
+    penalty = min(len(hidden_flaws), 4) * 0.8 + min(len(red_flags), 4) * 0.7
+    if "high" in competition_level or "saturated" in competition_level:
+        penalty += 1.0
+    elif "low" in competition_level:
+        penalty -= 0.5
+
+    verdict_bonus = 1.2 if investor_verdict == "yes" else 0.0
+    verdict_penalty = 1.0 if investor_verdict == "no" else 0.0
+
+    computed_readiness = max(2.5, min(9.5, round(7.5 - penalty + verdict_bonus - verdict_penalty, 1)))
+    computed_investor = max(2.5, min(9.5, round(7.0 - penalty * 0.8 + verdict_bonus - verdict_penalty, 1)))
+
+    if _looks_default(readiness):
+        result["founder_readiness_score"] = computed_readiness
+    if _looks_default(investor_score):
+        result["investor_interest_score"] = computed_investor
+
+    return result
 
 
 def market_researcher(client, startup_name, domain, log_step=None):
@@ -51,7 +138,7 @@ def market_researcher(client, startup_name, domain, log_step=None):
         prompt,
         system="You are a market research analyst focused on startup market opportunity.",
         log_step=log_step,
-        max_completion_tokens=500,
+        max_completion_tokens=420,
     )
 
 
@@ -82,7 +169,7 @@ def founder_analyst(client, startup_name, log_step=None):
         prompt,
         system="You are a VC analyst evaluating founding teams.",
         log_step=log_step,
-        max_completion_tokens=450,
+        max_completion_tokens=380,
     )
 
 
@@ -113,7 +200,117 @@ def competitive_intel(client, startup_name, market_summary, log_step=None):
         prompt,
         system="You are a competitive intelligence analyst.",
         log_step=log_step,
-        max_completion_tokens=500,
+        max_completion_tokens=420,
+    )
+
+
+def startup_validator_pro(client, startup_idea, log_step=None):
+    if log_step:
+        log_step("Validator Pro: scanning idea quality and founder readiness...")
+
+    searches = [
+        f"{startup_idea} startup competitors market",
+        f"{startup_idea} business model risks",
+    ]
+
+    context = ""
+    for query in searches:
+        if log_step:
+            log_step(f"Validator Pro: searching -> {query}")
+        context += run_search(query) + "\n\n"
+
+    defaults = {
+        "executive_summary": "This idea needs sharper validation around execution, monetization, and defensibility before launch.",
+        "problem_solved": "The problem statement needs clearer evidence from a specific customer segment.",
+        "target_audience": ["Early adopters who feel the problem acutely."],
+        "revenue_model": "Revenue model requires validation with real users.",
+        "hidden_flaws": ["Potential mismatch between product promise and willingness to pay."],
+        "risks_red_flags": ["Execution complexity may be higher than expected."],
+        "competition_level": "Moderate",
+        "market_opportunity": "There may be a real opportunity if the wedge is sharper and the ICP is narrower.",
+        "founder_readiness_score": 5,
+        "founder_readiness_reasoning": "Needs stronger clarity on market wedge, go-to-market, and repeatability.",
+        "investor_interest_score": 5,
+        "investor_lens": {
+            "verdict": "Maybe",
+            "why": "Interesting space, but evidence of traction and defensibility is not yet strong enough.",
+        },
+        "suggested_improvements": ["Sharpen ICP, wedge, and pricing before launch."],
+        "pivot_ideas": ["Choose a narrower niche with faster feedback loops and clearer ROI."],
+        "launch_difficulty_level": "Medium",
+        "recommended_next_steps": ["Interview 20 users", "Validate pricing", "Prototype a narrow MVP"],
+    }
+
+    prompt = (
+        f"Analyze this startup idea like a top incubator partner and VC operator.\n\n"
+        f"IDEA:\n{startup_idea}\n\n"
+        f"SEARCH CONTEXT:\n{context}\n\n"
+        "Return strict JSON with keys: executive_summary, problem_solved, target_audience (list), "
+        "revenue_model, hidden_flaws (list), risks_red_flags (list), competition_level, market_opportunity, "
+        "founder_readiness_score (1-10), founder_readiness_reasoning, investor_interest_score (1-10), "
+        "investor_lens (object with verdict and why), suggested_improvements (list), pivot_ideas (list), "
+        "launch_difficulty_level, recommended_next_steps (list). "
+        "Be practical, investor-minded, and critical when needed."
+    )
+
+    result = _generate_structured_analysis(
+        client,
+        prompt,
+        system="You are a startup studio partner evaluating whether a startup idea is viable, fundable, and execution-ready.",
+        defaults=defaults,
+        log_step=log_step,
+        max_completion_tokens=700,
+    )
+    return _normalize_validator_scores(result)
+
+
+def similar_startup_explorer(client, startup_idea, log_step=None):
+    if log_step:
+        log_step("Similar Explorer: mapping adjacent ideas and whitespace...")
+
+    searches = [
+        f"{startup_idea} similar startups competitors",
+        f"{startup_idea} startup india alternatives",
+    ]
+
+    context = ""
+    for query in searches:
+        if log_step:
+            log_step(f"Similar Explorer: searching -> {query}")
+        context += run_search(query) + "\n\n"
+
+    defaults = {
+        "similar_existing_startups": [
+            {"name": "Reference competitor", "description": "Comparable solution in an adjacent market.", "region": "Global"}
+        ],
+        "related_competitors": ["Established incumbents and fast-moving niche competitors."],
+        "global_versions": ["International variants exist in adjacent categories."],
+        "indian_market_versions": ["Indian market requires localization and distribution insight."],
+        "saturation_score": 5,
+        "white_space_opportunities": ["Find a narrower user segment with underserved workflow pain."],
+        "market_gaps": ["Current players may not serve a tightly defined customer wedge."],
+        "better_launch_angle": "Start with a niche where ROI is easy to measure.",
+        "untapped_audiences": ["Users with strong urgency but limited existing tooling."],
+        "niche_variations": ["Verticalized version for a high-friction industry."],
+    }
+
+    prompt = (
+        f"Analyze this startup idea like a competitive intelligence product team.\n\n"
+        f"IDEA:\n{startup_idea}\n\n"
+        f"SEARCH CONTEXT:\n{context}\n\n"
+        "Return strict JSON with keys: similar_existing_startups (list of objects with name, description, region), "
+        "related_competitors (list), global_versions (list), indian_market_versions (list), saturation_score (1-10), "
+        "white_space_opportunities (list), market_gaps (list), better_launch_angle, untapped_audiences (list), "
+        "niche_variations (list)."
+    )
+
+    return _generate_structured_analysis(
+        client,
+        prompt,
+        system="You are a startup market mapper who identifies competitors, saturation, and whitespace opportunities.",
+        defaults=defaults,
+        log_step=log_step,
+        max_completion_tokens=700,
     )
 
 
@@ -136,7 +333,7 @@ def report_writer(client, startup_name, market_data, founder_data, competitor_da
         prompt,
         system="You are a senior VC analyst writing an investment committee brief.",
         log_step=log_step,
-        max_completion_tokens=900,
+        max_completion_tokens=700,
     )
 
 
@@ -559,7 +756,7 @@ def judge_agent(client, report, log_step=None):
         messages=[{"role": "user", "content": prompt}],
         system_instruction=JUDGE_SYSTEM,
         log_step=log_step,
-        max_completion_tokens=350,
+        max_completion_tokens=260,
     )
 
     text = (response.choices[0].message.content or "").strip()
