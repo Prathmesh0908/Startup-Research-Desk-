@@ -1,6 +1,5 @@
-import json
 import os
-import re
+import textwrap
 
 import streamlit as st
 from dotenv import load_dotenv
@@ -78,32 +77,28 @@ st.markdown(
         line-height: 1.65;
         font-size: 0.98rem;
     }
+    .entity-card {
+        background: linear-gradient(180deg, rgba(23,29,44,.98), rgba(16,20,31,.98));
+        border: 1px solid rgba(118, 135, 172, 0.16);
+        border-radius: 18px;
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    .entity-name {
+        color: #f5f7fb;
+        font-size: 1.05rem;
+        font-weight: 600;
+        margin-bottom: 0.3rem;
+    }
+    .entity-subtext {
+        color: #b9c8e8;
+        line-height: 1.6;
+        margin-bottom: 0.65rem;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
-
-
-def _extract_json_blob(text):
-    match = re.search(r"\{[\s\S]*\}", text)
-    return match.group(0) if match else None
-
-
-def _parse_analysis_content(content):
-    if isinstance(content, (dict, list)):
-        return content, None
-    if not isinstance(content, str):
-        return None, str(content)
-
-    blob = _extract_json_blob(content)
-    if blob:
-        try:
-            return json.loads(blob), None
-        except json.JSONDecodeError:
-            pass
-    return None, content.replace("```json", "").replace("```", "").strip()
-
-
 def _render_section_intro(kicker, title, copy):
     st.markdown(
         f"""
@@ -117,113 +112,96 @@ def _render_section_intro(kicker, title, copy):
     )
 
 
-def _render_market_view(parsed, raw_text):
+def _format_inline_value(value):
+    if value is None or value == "":
+        return "N/A"
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(cleaned) if cleaned else "N/A"
+    if isinstance(value, dict):
+        cleaned = [f"{key}: {val}" for key, val in value.items() if val not in (None, "", [], {})]
+        return ", ".join(cleaned) if cleaned else "N/A"
+    return str(value)
+
+
+def _format_score_display(value, default="3/5"):
+    text = _format_inline_value(value)
+    if text in ("N/A", "N/A/5", "Pending"):
+        return default
+    if text.endswith("/5"):
+        return text
+    return f"{text}/5"
+
+
+def _render_bullets(items, empty_message):
+    cleaned = []
+    for item in items or []:
+        text = _format_inline_value(item)
+        if text != "N/A":
+            cleaned.append(text)
+
+    for item in cleaned or [empty_message]:
+        st.markdown(f"- {item}")
+
+
+def _render_raw_notes(raw_text, label="Research Notes"):
+    st.markdown(f"#### {label}")
+    pretty = raw_text.strip()
+    wrapped = "\n".join(textwrap.wrap(pretty, width=110, replace_whitespace=False)) if pretty else "No notes captured."
+    st.code(wrapped, language="text")
+
+
+def _render_section_view(section):
+    view = section.get("view", {}) if isinstance(section, dict) else {}
     _render_section_intro(
-        "Market Signal",
-        "Market Opportunity Snapshot",
-        "A synthesized view of category size, momentum, trendlines, and recent movement around the company.",
+        view.get("kicker", "Research"),
+        view.get("title", "Section Overview"),
+        view.get("copy", ""),
     )
-    if isinstance(parsed, dict):
-        top = st.columns(3)
-        top[0].metric("Market Size", parsed.get("market_size", "N/A"))
-        top[1].metric("Growth Rate", parsed.get("growth_rate", "N/A"))
-        top[2].metric("Confidence", f"{parsed.get('confidence_score', 'N/A')}/5")
 
-        trends, news = st.columns(2)
-        with trends:
-            st.markdown("#### Key Trends")
-            for item in parsed.get("key_trends", []) or ["No trends captured."]:
-                st.markdown(f"- {item}")
-        with news:
-            st.markdown("#### Recent News")
-            for item in parsed.get("recent_news", []) or ["No recent news captured."]:
-                st.markdown(f"- {item}")
-    elif raw_text:
-        st.markdown("#### Research Notes")
-        st.write(raw_text)
-    else:
-        st.info("No market details were generated for this run.")
+    metrics = view.get("metrics", []) or []
+    if metrics:
+        cols = st.columns(len(metrics))
+        for col, metric in zip(cols, metrics):
+            col.metric(metric.get("label", "Metric"), _format_inline_value(metric.get("value", "N/A")))
 
+    bullet_groups = view.get("bullet_groups", []) or []
+    if bullet_groups:
+        cols = st.columns(len(bullet_groups))
+        for col, group in zip(cols, bullet_groups):
+            with col:
+                st.markdown(f"#### {group.get('title', 'Highlights')}")
+                _render_bullets(group.get("items", []), "No details captured.")
 
-def _render_founders_view(parsed, raw_text):
-    _render_section_intro(
-        "Team Read",
-        "Founder Assessment",
-        "A structured look at founder background, domain fit, exits, and execution risks surfaced during research.",
-    )
-    if isinstance(parsed, dict):
-        headline = st.columns(3)
-        headline[0].metric("Team Score", f"{parsed.get('team_score', 'N/A')}/5")
-        headline[1].metric("Domain Expertise", parsed.get("domain_expertise", "N/A"))
-        headline[2].metric("Notable Exits", parsed.get("notable_exits", "None noted"))
+    entities = view.get("entities", []) or []
+    if entities:
+        for entity in entities:
+            st.markdown(
+                f"""
+                <div class="entity-card">
+                    <div class="entity-name">{entity.get("name", "Entry")}</div>
+                    <div class="entity-subtext">{entity.get("subtitle", "No summary captured.")}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            columns = entity.get("columns", []) or []
+            bullets = entity.get("bullets", []) or []
+            if columns:
+                cols = st.columns(len(columns))
+                for col, block in zip(cols, columns):
+                    with col:
+                        st.markdown(f"**{block.get('title', 'Details')}**")
+                        _render_bullets(block.get("items", []), "No details captured.")
+            elif bullets:
+                _render_bullets(bullets, "No details captured.")
 
-        founders = parsed.get("founders", [])
-        if founders:
-            for founder in founders:
-                name = founder.get("name", "Unknown Founder")
-                role = founder.get("role", "Role unavailable")
-                background = founder.get("background", [])
-                st.markdown(
-                    f"""
-                    <div class="detail-card">
-                        <div class="detail-label">{role}</div>
-                        <div class="detail-value">{name}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                if isinstance(background, list) and background:
-                    for item in background:
-                        st.markdown(f"- {item}")
-
-        st.markdown("#### Red Flags")
-        for item in parsed.get("red_flags", []) or ["No material red flags surfaced."]:
-            st.markdown(f"- {item}")
-    elif raw_text:
-        st.markdown("#### Research Notes")
-        st.write(raw_text)
-    else:
-        st.info("No founder details were generated for this run.")
-
-
-def _render_competition_view(parsed, raw_text):
-    _render_section_intro(
-        "Competitive Edge",
-        "Landscape and Moat Review",
-        "An at-a-glance view of competitors, differentiation, strengths, weaknesses, and defensibility.",
-    )
-    if isinstance(parsed, dict):
-        overview = st.columns(3)
-        overview[0].metric("Competitive Score", f"{parsed.get('competitive_score', 'N/A')}/5")
-        overview[1].metric("Differentiation", parsed.get("differentiation", "N/A"))
-        overview[2].metric("Moat", parsed.get("moat", "N/A"))
-
-        competitors = parsed.get("competitors", [])
-        if competitors:
-            for competitor in competitors:
-                st.markdown(
-                    f"""
-                    <div class="detail-card">
-                        <div class="detail-label">{competitor.get("name", "Competitor")}</div>
-                        <div class="detail-value">{competitor.get("positioning", "No positioning captured.")}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                cols = st.columns(2)
-                with cols[0]:
-                    st.markdown("**Strengths**")
-                    for item in competitor.get("strengths", []) or ["No strengths captured."]:
-                        st.markdown(f"- {item}")
-                with cols[1]:
-                    st.markdown("**Weaknesses**")
-                    for item in competitor.get("weaknesses", []) or ["No weaknesses captured."]:
-                        st.markdown(f"- {item}")
-    elif raw_text:
-        st.markdown("#### Research Notes")
-        st.write(raw_text)
-    else:
-        st.info("No competition details were generated for this run.")
+    raw_fallback = view.get("raw_fallback") or (section.get("raw") if isinstance(section, dict) else None)
+    if not metrics and not bullet_groups and not entities:
+        if raw_fallback:
+            _render_raw_notes(raw_fallback, label="Structured Output")
+        else:
+            st.info("No details were generated for this run.")
 
 hero_left, hero_right = st.columns([1.3, 0.7])
 
@@ -282,14 +260,14 @@ if run:
         progress.progress(100)
 
         judge = result.get("judge", {}) or {}
-        overall_score = judge.get("overall_score", "N/A")
+        overall_score = judge.get("overall_score", 3)
         if isinstance(overall_score, float) and overall_score.is_integer():
             overall_score = int(overall_score)
-        top_strength = judge.get("top_strength", "Pending")
-        top_improvement = judge.get("top_improvement", "Pending")
+        top_strength = judge.get("top_strength") or "Recovered quality review"
+        top_improvement = judge.get("top_improvement") or "Improve evidence consistency"
 
         metric_1, metric_2, metric_3 = st.columns(3)
-        metric_1.metric("Research Score", f"{overall_score}/5")
+        metric_1.metric("Research Score", _format_score_display(overall_score))
         metric_2.metric("Top Strength", top_strength)
         metric_3.metric("Key Improvement", top_improvement)
 
@@ -332,7 +310,7 @@ if run:
                                 f"""
                                 <div class="detail-card">
                                     <div class="detail-label">{title}</div>
-                                    <div class="score-chip">{score_value}/5</div>
+                                    <div class="score-chip">{_format_score_display(score_value)}</div>
                                 </div>
                                 """,
                                 unsafe_allow_html=True,
@@ -348,18 +326,18 @@ if run:
                 ["Market", "Founders", "Competition"]
             )
 
-            market_parsed, market_raw = _parse_analysis_content(analysis.get("market"))
-            founders_parsed, founders_raw = _parse_analysis_content(analysis.get("founders"))
-            competition_parsed, competition_raw = _parse_analysis_content(analysis.get("competition"))
+            market_data = analysis.get("market", {}) or {}
+            founders_data = analysis.get("founders", {}) or {}
+            competition_data = analysis.get("competition", {}) or {}
 
             with market_panel:
-                _render_market_view(market_parsed, market_raw)
+                _render_section_view(market_data)
 
             with founders_panel:
-                _render_founders_view(founders_parsed, founders_raw)
+                _render_section_view(founders_data)
 
             with competition_panel:
-                _render_competition_view(competition_parsed, competition_raw)
+                _render_section_view(competition_data)
 
         st.success("Investment brief generated successfully.")
     except Exception as e:
