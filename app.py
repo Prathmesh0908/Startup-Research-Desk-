@@ -9,6 +9,281 @@ from agents import run_research_pipeline, similar_startup_explorer, startup_vali
 
 load_dotenv()
 
+EMBEDDED_CSS = """
+:root {
+  --bg: #0b1020;
+  --panel: #11182b;
+  --panel-soft: #161f36;
+  --border: rgba(132, 151, 195, 0.18);
+  --text: #f4f7ff;
+  --muted: #9ba9c9;
+  --accent: #ff5a5f;
+  --accent-soft: rgba(255, 90, 95, 0.12);
+  --good: #2cc38a;
+  --warn: #ffb84d;
+  --bad: #ff7b7b;
+  --shadow: 0 24px 50px rgba(0, 0, 0, 0.22);
+}
+
+.stApp {
+  background:
+    radial-gradient(circle at top left, rgba(69, 113, 255, 0.12), transparent 30%),
+    radial-gradient(circle at top right, rgba(255, 90, 95, 0.1), transparent 24%),
+    linear-gradient(180deg, #0b1020 0%, #0d1222 100%);
+  color: var(--text);
+}
+
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #0f1528 0%, #0b1020 100%);
+  border-right: 1px solid var(--border);
+}
+
+.sidebar-brand {
+  font-size: 1.2rem;
+  font-weight: 800;
+  margin-bottom: 0.8rem;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.sidebar-hero {
+  background: linear-gradient(180deg, rgba(22, 31, 54, 0.98), rgba(14, 20, 36, 0.98));
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 1rem 1rem 0.9rem 1rem;
+  margin-bottom: 1rem;
+  box-shadow: var(--shadow);
+}
+
+.sidebar-badge {
+  display: inline-block;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: #ffd3d4;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.7rem;
+}
+
+.sidebar-copy {
+  color: var(--muted);
+  line-height: 1.6;
+  font-size: 0.94rem;
+}
+
+.hero-shell {
+  padding: 1.1rem 0 1.8rem 0;
+}
+
+.hero-badge {
+  display: inline-block;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  border: 1px solid rgba(255, 90, 95, 0.2);
+  color: #ffd3d4;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 0.9rem;
+}
+
+.hero-title {
+  font-size: 3rem;
+  line-height: 1.05;
+  margin: 0 0 0.6rem 0;
+  color: var(--text);
+}
+
+.hero-subtitle {
+  max-width: 900px;
+  color: var(--muted);
+  font-size: 1.08rem;
+  line-height: 1.7;
+  margin-bottom: 0;
+}
+
+.glass-card,
+.content-card,
+.metric-tile {
+  background: linear-gradient(180deg, rgba(20, 26, 44, 0.98), rgba(13, 18, 32, 0.98));
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: var(--shadow);
+}
+
+.glass-card {
+  padding: 1.1rem;
+  min-height: 150px;
+  margin-bottom: 1rem;
+}
+
+.card-kicker,
+.metric-label {
+  color: #8fb0ff;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 0.65rem;
+}
+
+.card-copy {
+  color: var(--text);
+  line-height: 1.75;
+  font-size: 1rem;
+}
+
+.metric-tile {
+  padding: 1rem 1.1rem;
+  margin: 0.65rem 0 1rem 0;
+}
+
+.metric-value {
+  color: var(--text);
+  font-size: 1.65rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.content-card {
+  padding: 1.1rem 1.15rem;
+  margin-bottom: 1rem;
+}
+
+.card-title {
+  color: var(--text);
+  font-size: 1.15rem;
+  font-weight: 700;
+  margin-bottom: 0.7rem;
+}
+
+.card-body {
+  color: var(--muted);
+  line-height: 1.75;
+  font-size: 0.99rem;
+}
+
+.bullet-list {
+  margin: 0;
+  padding-left: 1rem;
+  color: var(--muted);
+  line-height: 1.9;
+}
+
+.bullet-list li {
+  margin-bottom: 0.3rem;
+}
+
+.card-tone-subtle {
+  background: linear-gradient(180deg, rgba(18, 25, 46, 0.98), rgba(13, 18, 32, 0.98));
+}
+
+.card-tone-good {
+  border-color: rgba(44, 195, 138, 0.25);
+  background: linear-gradient(180deg, rgba(13, 39, 32, 0.98), rgba(10, 26, 22, 0.98));
+}
+
+.card-tone-warn {
+  border-color: rgba(255, 184, 77, 0.24);
+  background: linear-gradient(180deg, rgba(45, 31, 10, 0.98), rgba(28, 21, 9, 0.98));
+}
+
+.card-tone-bad {
+  border-color: rgba(255, 123, 123, 0.24);
+  background: linear-gradient(180deg, rgba(45, 19, 19, 0.98), rgba(29, 14, 14, 0.98));
+}
+
+.score-line {
+  font-size: 1.1rem;
+  color: var(--text);
+  margin-top: 0.55rem;
+  font-weight: 700;
+}
+
+.micro-copy {
+  color: var(--muted);
+  margin-top: 0.3rem;
+  line-height: 1.6;
+}
+
+.status-pill {
+  display: inline-block;
+  padding: 0.45rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+}
+
+.status-neutral {
+  background: rgba(143, 176, 255, 0.14);
+  color: #d6e4ff;
+}
+
+.status-good {
+  background: rgba(44, 195, 138, 0.16);
+  color: #bbf4dd;
+}
+
+.status-warn {
+  background: rgba(255, 184, 77, 0.18);
+  color: #ffe4b1;
+}
+
+.status-bad {
+  background: rgba(255, 123, 123, 0.16);
+  color: #ffd3d3;
+}
+
+.mini-tag {
+  display: inline-block;
+  margin-top: 0.55rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(143, 176, 255, 0.12);
+  color: #dce8ff;
+  font-size: 0.8rem;
+}
+
+div[data-testid="stProgressBar"] > div > div > div {
+  background: linear-gradient(90deg, #ff5a5f 0%, #ff885f 100%);
+}
+
+button[kind="primary"] {
+  border-radius: 14px !important;
+  background: linear-gradient(90deg, #ff5a5f 0%, #ff7f6a 100%) !important;
+  border: none !important;
+  box-shadow: 0 14px 30px rgba(255, 90, 95, 0.24) !important;
+}
+
+div.stButton > button,
+div.stDownloadButton > button {
+  border-radius: 14px !important;
+}
+
+div[data-baseweb="tab-list"] {
+  gap: 0.4rem;
+}
+
+button[data-baseweb="tab"] {
+  border-radius: 12px 12px 0 0 !important;
+  padding: 0.55rem 0.95rem !important;
+}
+
+[data-testid="stSidebar"] [data-baseweb="radio"] label {
+  border-radius: 12px;
+  padding: 0.25rem 0.2rem;
+}
+
+@media (max-width: 900px) {
+  .hero-title {
+    font-size: 2.25rem;
+  }
+}
+"""
+
 st.set_page_config(
     page_title="Startup Research Desk AI",
     page_icon="🚀",
@@ -18,8 +293,15 @@ st.set_page_config(
 
 def load_css():
     css_path = Path(__file__).with_name("styles.css")
+    css = EMBEDDED_CSS
     if css_path.exists():
-        st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+        try:
+            file_css = css_path.read_text(encoding="utf-8").strip()
+            if file_css:
+                css = file_css
+        except OSError:
+            pass
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
 load_css()
