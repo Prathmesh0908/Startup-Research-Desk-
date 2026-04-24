@@ -1,346 +1,507 @@
 import os
-import textwrap
+from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
 from groq import Groq
 
-from agents import run_research_pipeline
-from api_service import MODEL
+from agents import run_research_pipeline, similar_startup_explorer, startup_validator_pro
 
 load_dotenv()
 
 st.set_page_config(
-    page_title="Startup Research Desk",
-    page_icon="🔍",
+    page_title="Startup Research Desk AI",
+    page_icon="🚀",
     layout="wide",
 )
 
-st.title("🔍 Startup Research Desk")
-st.caption("AI-powered VC diligence workspace for polished investment briefs")
 
-st.markdown(
-    """
-    <style>
-    .detail-card {
-        background: linear-gradient(180deg, rgba(27,34,51,.95), rgba(18,22,34,.98));
-        border: 1px solid rgba(118, 135, 172, 0.22);
-        border-radius: 18px;
-        padding: 1rem 1rem 0.8rem 1rem;
-        margin-bottom: 0.9rem;
-        box-shadow: 0 14px 30px rgba(0, 0, 0, 0.18);
-    }
-    .detail-label {
-        color: #9fb3d9;
-        font-size: 0.78rem;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        margin-bottom: 0.45rem;
-    }
-    .detail-value {
-        color: #f5f7fb;
-        font-size: 1.05rem;
-        line-height: 1.55;
-    }
-    .score-chip {
-        display: inline-block;
-        background: rgba(67, 97, 238, 0.18);
-        color: #dfe8ff;
-        border: 1px solid rgba(95, 129, 255, 0.26);
-        border-radius: 999px;
-        padding: 0.2rem 0.65rem;
-        font-size: 0.84rem;
-        margin-bottom: 0.6rem;
-    }
-    .subtle-card {
-        background: linear-gradient(180deg, rgba(20,24,38,.98), rgba(14,18,29,.98));
-        border: 1px solid rgba(118, 135, 172, 0.18);
-        border-radius: 20px;
-        padding: 1.1rem 1.1rem 0.9rem 1.1rem;
-        margin-bottom: 1rem;
-    }
-    .section-kicker {
-        color: #8fb0ff;
-        font-size: 0.75rem;
-        letter-spacing: 0.12em;
-        text-transform: uppercase;
-        margin-bottom: 0.4rem;
-    }
-    .section-title {
-        color: #f4f7ff;
-        font-size: 1.25rem;
-        font-weight: 600;
-        margin-bottom: 0.35rem;
-    }
-    .section-copy {
-        color: #c7d3eb;
-        line-height: 1.65;
-        font-size: 0.98rem;
-    }
-    .entity-card {
-        background: linear-gradient(180deg, rgba(23,29,44,.98), rgba(16,20,31,.98));
-        border: 1px solid rgba(118, 135, 172, 0.16);
-        border-radius: 18px;
-        padding: 1rem;
-        margin-bottom: 1rem;
-    }
-    .entity-name {
-        color: #f5f7fb;
-        font-size: 1.05rem;
-        font-weight: 600;
-        margin-bottom: 0.3rem;
-    }
-    .entity-subtext {
-        color: #b9c8e8;
-        line-height: 1.6;
-        margin-bottom: 0.65rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-def _render_section_intro(kicker, title, copy):
+def load_css():
+    css_path = Path(__file__).with_name("styles.css")
+    if css_path.exists():
+        st.markdown(f"<style>{css_path.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+
+
+load_css()
+
+
+def get_client():
+    api_key = os.getenv("GROQ_API_KEY", "")
+    tavily_key = os.getenv("TAVILY_API_KEY", "")
+    if not api_key or not tavily_key:
+        st.error("Missing backend configuration. Please set `GROQ_API_KEY` and `TAVILY_API_KEY` in your environment.")
+        st.stop()
+    return Groq(api_key=api_key)
+
+
+def format_value(value, default="N/A"):
+    if value in (None, "", [], {}):
+        return default
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return ", ".join(cleaned) if cleaned else default
+    if isinstance(value, dict):
+        cleaned = [f"{key}: {val}" for key, val in value.items() if val not in (None, "", [], {})]
+        return ", ".join(cleaned) if cleaned else default
+    return str(value)
+
+
+def format_score(value, default=5, max_score=10):
+    if isinstance(value, (int, float)):
+        score = float(value)
+    else:
+        text = format_value(value, default="")
+        match = None
+        if text:
+            import re
+            match = re.search(r"([0-9]+(?:\.[0-9]+)?)", text)
+        score = float(match.group(1)) if match else float(default)
+    return max(0.0, min(score, float(max_score)))
+
+
+def render_page_header(title, subtitle, badge):
     st.markdown(
         f"""
-        <div class="subtle-card">
-            <div class="section-kicker">{kicker}</div>
-            <div class="section-title">{title}</div>
-            <div class="section-copy">{copy}</div>
+        <section class="hero-shell">
+            <div class="hero-badge">{badge}</div>
+            <h1 class="hero-title">{title}</h1>
+            <p class="hero-subtitle">{subtitle}</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_glance_cards(items):
+    columns = st.columns(len(items))
+    for column, item in zip(columns, items):
+        with column:
+            st.markdown(
+                f"""
+                <div class="glass-card">
+                    <div class="card-kicker">{item['title']}</div>
+                    <div class="card-copy">{item['copy']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def render_metric_row(items):
+    columns = st.columns(len(items))
+    for column, item in zip(columns, items):
+        with column:
+            st.markdown(
+                f"""
+                <div class="metric-tile">
+                    <div class="metric-label">{item['label']}</div>
+                    <div class="metric-value">{item['value']}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
+def render_text_card(title, body, tone="default"):
+    tone_class = f"card-tone-{tone}"
+    st.markdown(
+        f"""
+        <div class="content-card {tone_class}">
+            <div class="card-title">{title}</div>
+            <div class="card-body">{body}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
 
-def _format_inline_value(value):
-    if value is None or value == "":
-        return "N/A"
-    if isinstance(value, list):
-        cleaned = [str(item).strip() for item in value if str(item).strip()]
-        return ", ".join(cleaned) if cleaned else "N/A"
-    if isinstance(value, dict):
-        cleaned = [f"{key}: {val}" for key, val in value.items() if val not in (None, "", [], {})]
-        return ", ".join(cleaned) if cleaned else "N/A"
-    return str(value)
-
-
-def _format_score_display(value, default="3/5"):
-    text = _format_inline_value(value)
-    if text in ("N/A", "N/A/5", "Pending"):
-        return default
-    if text.endswith("/5"):
-        return text
-    return f"{text}/5"
-
-
-def _render_bullets(items, empty_message):
-    cleaned = []
-    for item in items or []:
-        text = _format_inline_value(item)
-        if text != "N/A":
-            cleaned.append(text)
-
-    for item in cleaned or [empty_message]:
-        st.markdown(f"- {item}")
-
-
-def _render_raw_notes(raw_text, label="Research Notes"):
-    st.markdown(f"#### {label}")
-    pretty = raw_text.strip()
-    wrapped = "\n".join(textwrap.wrap(pretty, width=110, replace_whitespace=False)) if pretty else "No notes captured."
-    st.code(wrapped, language="text")
-
-
-def _render_section_view(section):
-    view = section.get("view", {}) if isinstance(section, dict) else {}
-    _render_section_intro(
-        view.get("kicker", "Research"),
-        view.get("title", "Section Overview"),
-        view.get("copy", ""),
-    )
-
-    metrics = view.get("metrics", []) or []
-    if metrics:
-        cols = st.columns(len(metrics))
-        for col, metric in zip(cols, metrics):
-            col.metric(metric.get("label", "Metric"), _format_inline_value(metric.get("value", "N/A")))
-
-    bullet_groups = view.get("bullet_groups", []) or []
-    if bullet_groups:
-        cols = st.columns(len(bullet_groups))
-        for col, group in zip(cols, bullet_groups):
-            with col:
-                st.markdown(f"#### {group.get('title', 'Highlights')}")
-                _render_bullets(group.get("items", []), "No details captured.")
-
-    entities = view.get("entities", []) or []
-    if entities:
-        for entity in entities:
-            st.markdown(
-                f"""
-                <div class="entity-card">
-                    <div class="entity-name">{entity.get("name", "Entry")}</div>
-                    <div class="entity-subtext">{entity.get("subtitle", "No summary captured.")}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-            columns = entity.get("columns", []) or []
-            bullets = entity.get("bullets", []) or []
-            if columns:
-                cols = st.columns(len(columns))
-                for col, block in zip(cols, columns):
-                    with col:
-                        st.markdown(f"**{block.get('title', 'Details')}**")
-                        _render_bullets(block.get("items", []), "No details captured.")
-            elif bullets:
-                _render_bullets(bullets, "No details captured.")
-
-    raw_fallback = view.get("raw_fallback") or (section.get("raw") if isinstance(section, dict) else None)
-    if not metrics and not bullet_groups and not entities:
-        if raw_fallback:
-            _render_raw_notes(raw_fallback, label="Structured Output")
-        else:
-            st.info("No details were generated for this run.")
-
-hero_left, hero_right = st.columns([1.3, 0.7])
-
-with hero_left:
-    startup_name = st.text_input(
-        "Startup Name",
-        placeholder="e.g. Notion",
-    )
-    domain = st.text_input(
-        "Domain (optional)",
-        placeholder="e.g. notion.so",
-    )
-
-with hero_right:
-    st.markdown("### What You Get")
+def render_bullet_card(title, items, tone="default"):
+    bullets = items or ["No details captured."]
+    bullet_html = "".join(f"<li>{format_value(item)}</li>" for item in bullets)
+    tone_class = f"card-tone-{tone}"
     st.markdown(
-        "- Market sizing and trend scan\n"
-        "- Founder and team assessment\n"
-        "- Competitor mapping and moat view\n"
-        "- VC-style investment brief with QA scoring"
+        f"""
+        <div class="content-card {tone_class}">
+            <div class="card-title">{title}</div>
+            <ul class="bullet-list">{bullet_html}</ul>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-run = st.button("Generate Investment Brief", type="primary", use_container_width=True)
 
-if run:
-    if not startup_name:
-        st.error("Please enter startup name.")
-        st.stop()
+def render_progress_panel(title, score, max_score, caption):
+    numeric_score = format_score(score, default=max_score / 2, max_score=max_score)
+    st.markdown(f"#### {title}")
+    st.progress(numeric_score / max_score)
+    st.markdown(
+        f"""
+        <div class="score-line">{numeric_score:.1f}/{max_score}</div>
+        <div class="micro-copy">{caption}</div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    api_key = os.getenv("GROQ_API_KEY", "")
-    tavily_key = os.getenv("TAVILY_API_KEY", "")
 
-    if not api_key or not tavily_key:
-        st.error("Missing backend configuration. Please set `GROQ_API_KEY` and `TAVILY_API_KEY` in your environment.")
-        st.stop()
+def render_badge(text, tone="neutral"):
+    st.markdown(f"<span class='status-pill status-{tone}'>{text}</span>", unsafe_allow_html=True)
 
-    client = Groq(api_key=api_key)
-    status_box = st.empty()
-    progress = st.progress(0)
-    status_steps = []
 
-    def log_step(msg):
-        status_steps.append(msg)
-        progress.progress(min(100, max(10, len(status_steps) * 8)))
-        status_box.info("\n".join(status_steps[-4:]))
+def render_research_details(analysis):
+    market_panel, founders_panel, competition_panel = st.tabs(["Market", "Founders", "Competition"])
+    sections = {
+        "Market": analysis.get("market", {}) or {},
+        "Founders": analysis.get("founders", {}) or {},
+        "Competition": analysis.get("competition", {}) or {},
+    }
 
-    try:
-        with st.spinner("Running backend research pipeline..."):
-            result = run_research_pipeline(
+    for panel, section in zip([market_panel, founders_panel, competition_panel], sections.values()):
+        with panel:
+            view = section.get("view", {}) if isinstance(section, dict) else {}
+            render_text_card(view.get("title", "Section Overview"), view.get("copy", "Structured analysis from the backend."), tone="subtle")
+
+            metrics = view.get("metrics", []) or []
+            meaningful_metrics = [metric for metric in metrics if format_value(metric.get("value")) != "N/A"]
+            if meaningful_metrics:
+                render_metric_row(
+                    [{"label": metric.get("label", "Metric"), "value": format_value(metric.get("value"))} for metric in meaningful_metrics]
+                )
+
+            bullet_groups = view.get("bullet_groups", []) or []
+            if bullet_groups:
+                cols = st.columns(len(bullet_groups))
+                for col, group in zip(cols, bullet_groups):
+                    with col:
+                        render_bullet_card(group.get("title", "Highlights"), group.get("items", []))
+
+            entities = view.get("entities", []) or []
+            for entity in entities:
+                render_text_card(entity.get("name", "Entry"), entity.get("subtitle", "No summary captured."))
+                columns = entity.get("columns", []) or []
+                bullets = entity.get("bullets", []) or []
+                if columns:
+                    cols = st.columns(len(columns))
+                    for col, block in zip(cols, columns):
+                        with col:
+                            render_bullet_card(block.get("title", "Details"), block.get("items", []), tone="subtle")
+                elif bullets:
+                    render_bullet_card("Details", bullets, tone="subtle")
+
+            if not meaningful_metrics and not bullet_groups and not entities:
+                raw = view.get("raw_fallback") or section.get("raw")
+                if raw:
+                    st.code(raw, language="text")
+                else:
+                    st.info("No structured analysis available for this section.")
+
+
+def render_quality_review(judge):
+    summary = judge.get("summary")
+    if summary:
+        render_text_card("Executive Readout", summary, tone="subtle")
+
+    scores = judge.get("scores", {}) or {}
+    if scores:
+        items = []
+        for label, item in scores.items():
+            items.append(
+                {
+                    "label": label.replace("_", " ").title(),
+                    "value": f"{format_score(item.get('score'), default=3, max_score=5):.1f}/5",
+                }
+            )
+        render_metric_row(items[:3])
+        if len(items) > 3:
+            render_metric_row(items[3:])
+
+        for label, item in scores.items():
+            reasoning = item.get("reasoning")
+            if reasoning:
+                st.caption(f"{label.replace('_', ' ').title()}: {reasoning}")
+    else:
+        st.json(judge)
+
+
+def render_home_page():
+    render_page_header(
+        "Startup Research Desk AI",
+        "AI-powered startup validation, founder intelligence, and portfolio-grade investment briefing for modern operators.",
+        "Portfolio-Level Startup Intelligence",
+    )
+
+    render_glance_cards(
+        [
+            {"title": "Founder Intelligence", "copy": "Team quality, market signals, and investor-style reasoning in one workflow."},
+            {"title": "Validation Engine", "copy": "Idea flaws, saturation, monetization risk, and pivot guidance before you build."},
+            {"title": "VC Briefing", "copy": "Premium research briefs with quality review and structured internal notes."},
+        ]
+    )
+
+    st.markdown("### Why This Project Is Unique")
+    render_glance_cards(
+        [
+            {"title": "Flaw Detector", "copy": "Surfaces hidden risks, execution drag, business model gaps, and failure patterns."},
+            {"title": "Similarity Mapping", "copy": "Finds copycats, global analogs, saturation levels, and whitespace opportunities."},
+            {"title": "Investor Lens", "copy": "Turns raw research into founder readiness and fundability signals recruiters will remember."},
+        ]
+    )
+
+    st.markdown("### Generate Investment Brief")
+    left, right = st.columns([1.2, 0.8])
+    with left:
+        startup_name = st.text_input("Startup Name", placeholder="e.g. Sourcy AI", key="home_startup_name")
+        domain = st.text_input("Domain (optional)", placeholder="e.g. sourcy.ai", key="home_domain")
+    with right:
+        render_text_card(
+            "What This Delivers",
+            "A polished investment brief, internal research details, and quality-reviewed analysis that feels like a real VC workflow.",
+            tone="subtle",
+        )
+
+    if st.button("Generate Investment Brief", type="primary", use_container_width=True, key="home_generate"):
+        if not startup_name:
+            st.error("Please enter a startup name.")
+            st.stop()
+
+        client = get_client()
+        with st.spinner("Building premium startup brief..."):
+            st.session_state["home_result"] = run_research_pipeline(
                 client,
                 startup_name=startup_name,
                 domain=domain,
-                log_step=log_step,
             )
 
-        progress.progress(100)
-
+    result = st.session_state.get("home_result")
+    if result:
         judge = result.get("judge", {}) or {}
-        overall_score = judge.get("overall_score", 3)
-        if isinstance(overall_score, float) and overall_score.is_integer():
-            overall_score = int(overall_score)
-        top_strength = judge.get("top_strength") or "Recovered quality review"
-        top_improvement = judge.get("top_improvement") or "Improve evidence consistency"
-
-        metric_1, metric_2, metric_3 = st.columns(3)
-        metric_1.metric("Research Score", _format_score_display(overall_score))
-        metric_2.metric("Top Strength", top_strength)
-        metric_3.metric("Key Improvement", top_improvement)
+        render_metric_row(
+            [
+                {"label": "Research Score", "value": f"{format_score(judge.get('overall_score'), default=3, max_score=5):.1f}/5"},
+                {"label": "Top Strength", "value": format_value(judge.get("top_strength"), "Recovered quality review")},
+                {"label": "Key Improvement", "value": format_value(judge.get("top_improvement"), "Improve evidence consistency")},
+            ]
+        )
 
         st.markdown("## Investment Brief")
         st.markdown(result["report"])
-
         st.download_button(
             "Download Report",
             result["report"],
-            file_name=f"{startup_name}_report.md",
+            file_name=f"{result.get('startup_name', 'startup')}_report.md",
             use_container_width=True,
         )
 
         review_tab, research_tab = st.tabs(["Quality Review", "Internal Research Details"])
-
         with review_tab:
-            summary = judge.get("summary")
-            if summary:
-                st.markdown(
-                    f"""
-                    <div class="detail-card">
-                        <div class="detail-label">Executive Readout</div>
-                        <div class="detail-value">{summary}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            scores = judge.get("scores", {}) or {}
-            if scores:
-                score_items = list(scores.items())
-                for index in range(0, len(score_items), 3):
-                    score_columns = st.columns(min(3, len(score_items) - index))
-                    for column, (label, item) in zip(score_columns, score_items[index:index + 3]):
-                        score_value = item.get("score", "N/A") if isinstance(item, dict) else "N/A"
-                        reasoning = item.get("reasoning", "") if isinstance(item, dict) else ""
-                        title = label.replace("_", " ").title()
-                        with column:
-                            st.markdown(
-                                f"""
-                                <div class="detail-card">
-                                    <div class="detail-label">{title}</div>
-                                    <div class="score-chip">{_format_score_display(score_value)}</div>
-                                </div>
-                                """,
-                                unsafe_allow_html=True,
-                            )
-                            if reasoning:
-                                st.caption(reasoning)
-            else:
-                st.json(judge)
-
+            render_quality_review(judge)
         with research_tab:
-            analysis = result.get("analysis", {}) or {}
-            market_panel, founders_panel, competition_panel = st.tabs(
-                ["Market", "Founders", "Competition"]
+            render_research_details(result.get("analysis", {}) or {})
+
+
+def render_validator_page():
+    render_page_header(
+        "Startup Validator Pro",
+        "Pressure-test startup ideas like a founder, operator, and investor in one premium dashboard.",
+        "Founder Intelligence Dashboard",
+    )
+
+    idea = st.text_area(
+        "Enter your startup idea",
+        placeholder="AI-based grocery delivery for hostel students",
+        height=140,
+        key="validator_idea",
+    )
+
+    if st.button("Analyze Idea", type="primary", use_container_width=True, key="validator_button"):
+        if not idea.strip():
+            st.error("Please enter your startup idea.")
+            st.stop()
+
+        client = get_client()
+        with st.spinner("Running idea validation engine..."):
+            st.session_state["validator_result"] = startup_validator_pro(client, idea)
+
+    result = st.session_state.get("validator_result")
+    if not result:
+        return
+
+    investor = result.get("investor_lens", {}) or {}
+    verdict = format_value(investor.get("verdict"), "Maybe")
+    verdict_tone = "good" if verdict.lower() == "yes" else "warn" if verdict.lower() == "maybe" else "bad"
+
+    render_text_card("Executive Summary", format_value(result.get("executive_summary")), tone="subtle")
+    render_badge(f"Investor Lens: {verdict}", tone=verdict_tone)
+
+    render_metric_row(
+        [
+            {"label": "Competition Level", "value": format_value(result.get("competition_level"), "Moderate")},
+            {"label": "Launch Difficulty", "value": format_value(result.get("launch_difficulty_level"), "Medium")},
+            {"label": "Revenue Model", "value": format_value(result.get("revenue_model"), "Needs validation")},
+        ]
+    )
+
+    score_left, score_right = st.columns(2)
+    with score_left:
+        render_progress_panel(
+            "Founder Readiness Score",
+            result.get("founder_readiness_score", 5),
+            10,
+            format_value(result.get("founder_readiness_reasoning"), "Needs stronger validation signals."),
+        )
+    with score_right:
+        render_progress_panel(
+            "Investor Interest Score",
+            result.get("investor_interest_score", 5),
+            10,
+            format_value(investor.get("why"), "Investor interest depends on sharper traction and positioning."),
+        )
+
+    info_left, info_right = st.columns(2)
+    with info_left:
+        render_text_card("Problem Solved", format_value(result.get("problem_solved")), tone="subtle")
+        render_text_card("Market Opportunity", format_value(result.get("market_opportunity")), tone="subtle")
+    with info_right:
+        render_bullet_card("Target Audience", result.get("target_audience", []))
+        render_text_card("Investor Verdict", format_value(investor.get("why")), tone="subtle")
+
+    grid_left, grid_right = st.columns(2)
+    with grid_left:
+        render_bullet_card("Hidden Flaws", result.get("hidden_flaws", []), tone="bad")
+        render_bullet_card("Risks & Red Flags", result.get("risks_red_flags", []), tone="bad")
+    with grid_right:
+        render_bullet_card("Suggested Improvements", result.get("suggested_improvements", []), tone="good")
+        render_bullet_card("Pivot Ideas", result.get("pivot_ideas", []), tone="warn")
+
+    render_bullet_card("Recommended Next Steps", result.get("recommended_next_steps", []), tone="subtle")
+
+
+def render_explorer_page():
+    render_page_header(
+        "Similar Startup Explorer",
+        "Map the market around your idea across competitors, global analogs, Indian variants, and whitespace.",
+        "Similarity Discovery Engine",
+    )
+
+    idea = st.text_area(
+        "Describe your startup idea",
+        placeholder="AI co-pilot for SMB founders to validate startup ideas before launch",
+        height=140,
+        key="explorer_idea",
+    )
+
+    if st.button("Search Similar Ideas", type="primary", use_container_width=True, key="explorer_button"):
+        if not idea.strip():
+            st.error("Please describe your startup idea.")
+            st.stop()
+
+        client = get_client()
+        with st.spinner("Exploring startup similarity landscape..."):
+            st.session_state["explorer_result"] = similar_startup_explorer(client, idea)
+
+    result = st.session_state.get("explorer_result")
+    if not result:
+        return
+
+    render_metric_row(
+        [
+            {"label": "Saturation Score", "value": f"{format_score(result.get('saturation_score'), default=5, max_score=10):.1f}/10"},
+            {"label": "Better Launch Angle", "value": format_value(result.get("better_launch_angle"), "Find a narrower wedge.")},
+        ]
+    )
+
+    left, right = st.columns(2)
+    with left:
+        render_bullet_card("Related Competitors", result.get("related_competitors", []))
+        render_bullet_card("White Space Opportunities", result.get("white_space_opportunities", []), tone="good")
+        render_bullet_card("Untapped Audience Ideas", result.get("untapped_audiences", []), tone="good")
+    with right:
+        render_bullet_card("Global Versions", result.get("global_versions", []))
+        render_bullet_card("Indian Market Versions", result.get("indian_market_versions", []))
+        render_bullet_card("What Is Missing In Current Market", result.get("market_gaps", []), tone="warn")
+
+    st.markdown("### Similar Existing Startups")
+    startups = result.get("similar_existing_startups", []) or []
+    if startups:
+        for startup in startups:
+            render_text_card(
+                format_value(startup.get("name"), "Comparable Startup"),
+                f"{format_value(startup.get('description'), 'Comparable play in this space.')}<br><span class='mini-tag'>{format_value(startup.get('region'), 'Global')}</span>",
+                tone="subtle",
             )
+    else:
+        st.info("No similar startups captured for this run.")
 
-            market_data = analysis.get("market", {}) or {}
-            founders_data = analysis.get("founders", {}) or {}
-            competition_data = analysis.get("competition", {}) or {}
+    render_bullet_card("Top 5 Niche Variations", result.get("niche_variations", []), tone="subtle")
 
-            with market_panel:
-                _render_section_view(market_data)
 
-            with founders_panel:
-                _render_section_view(founders_data)
+def render_about_page():
+    render_page_header(
+        "About The AI Model",
+        "A premium AI startup intelligence model designed to impress recruiters, incubators, founders, and analysts.",
+        "Model Story",
+    )
 
-            with competition_panel:
-                _render_section_view(competition_data)
+    render_text_card(
+        "Startup Research Desk AI",
+        "This AI model combines startup validation, founder intelligence, competitor mapping, and investor-style judgment inside one modern Streamlit product shell.",
+        tone="subtle",
+    )
 
-        st.success("Investment brief generated successfully.")
-    except Exception as e:
-        st.error(f"Error: {str(e)}")
-    finally:
-        status_box.empty()
+    render_glance_cards(
+        [
+            {"title": "LLM Research Layer", "copy": "LLM-backed research synthesis with structured outputs and safe fallbacks."},
+            {"title": "Search Intelligence", "copy": "Tavily-powered web context for markets, competitors, and whitespace discovery."},
+            {"title": "Product-Ready UX", "copy": "Premium SaaS styling, multiple interfaces, and dashboard-quality rendering."},
+        ]
+    )
+
+
+def render_unique_page():
+    render_page_header(
+        "Why This Project Is Unique",
+        "Most student projects stop at report generation. This one goes further into flaw detection, saturation analysis, founder readiness, and investor-style decisioning.",
+        "Differentiation",
+    )
+
+    render_glance_cards(
+        [
+            {"title": "Startup Flaw Detector", "copy": "Exposes hidden risks, weak monetization logic, scalability drag, privacy risks, and adoption friction."},
+            {"title": "Similar Startup Discovery Engine", "copy": "Maps existing startups, copycat risks, market saturation, and better launch angles."},
+            {"title": "Founder Readiness + Investor Lens", "copy": "Adds decision-grade scoring that feels closer to an incubator or VC workflow than a chatbot."},
+        ]
+    )
+
+    render_text_card(
+        "Why Recruiters Notice It",
+        "It demonstrates full-stack product thinking: multi-flow AI UX, structured backend outputs, strong visual design, and domain-specific reasoning for startups and venture workflows.",
+        tone="good",
+    )
+
+
+st.sidebar.markdown("<div class='sidebar-brand'>Startup Research Desk AI</div>", unsafe_allow_html=True)
+st.sidebar.markdown(
+    """
+    <div class="sidebar-hero">
+        <div class="sidebar-badge">AI Startup Intelligence</div>
+        <div class="sidebar-copy">
+            Founder intelligence, startup validation, and investor-style analysis in one premium AI model.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+page = st.sidebar.radio(
+    "Navigation",
+    ["Home", "Startup Validator Pro", "Similar Startup Explorer", "About AI Model", "Why Unique"],
+)
+
+if page == "Home":
+    render_home_page()
+elif page == "Startup Validator Pro":
+    render_validator_page()
+elif page == "Similar Startup Explorer":
+    render_explorer_page()
+elif page == "About AI Model":
+    render_about_page()
+else:
+    render_unique_page()
