@@ -519,15 +519,6 @@ def render_home_page():
         ]
     )
 
-    st.markdown("### Why This Project Is Unique")
-    render_glance_cards(
-        [
-            {"title": "Flaw Detector", "copy": "Surfaces hidden risks, execution drag, business model gaps, and failure patterns."},
-            {"title": "Similarity Mapping", "copy": "Finds copycats, global analogs, saturation levels, and whitespace opportunities."},
-            {"title": "Investor Lens", "copy": "Turns raw research into founder readiness and fundability signals recruiters will remember."},
-        ]
-    )
-
     st.markdown("### Generate Investment Brief")
     left, right = st.columns([1.2, 0.8])
     with left:
